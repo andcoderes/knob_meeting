@@ -14,6 +14,7 @@ enum class MsgType : uint8_t {
 struct __attribute__((packed)) PackedMeeting {
     uint8_t hour;
     uint8_t minute;
+    uint8_t duration;  // minutes (5-60)
 };
 
 // Wire protocol message — includes full meeting list
@@ -27,8 +28,9 @@ struct __attribute__((packed)) PeerMessage {
 
 // Peer state as seen by this device
 struct PeerMeeting {
-    uint8_t hour   = 0;
-    uint8_t minute = 0;
+    uint8_t hour     = 0;
+    uint8_t minute   = 0;
+    uint8_t duration = 30;  // minutes (5-60)
 };
 
 struct PeerState {
@@ -43,9 +45,11 @@ void comms_init();
 void comms_loop();
 
 void comms_send_status(MeetingStatus status, uint8_t meeting_count,
-                       const uint8_t* hours, const uint8_t* minutes);
+                       const uint8_t* hours, const uint8_t* minutes,
+                       const uint8_t* durations);
 void comms_send_heartbeat(MeetingStatus status, uint8_t meeting_count,
-                          const uint8_t* hours, const uint8_t* minutes);
+                          const uint8_t* hours, const uint8_t* minutes,
+                          const uint8_t* durations);
 
 bool        comms_is_paired();
 PeerState   comms_get_peer_state();

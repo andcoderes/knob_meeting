@@ -18,7 +18,8 @@ static void send_message(const uint8_t *dest, const PeerMessage &msg);
 static void add_espnow_peer(const uint8_t *mac);
 
 static void fill_message(PeerMessage &msg, MsgType type, MeetingStatus status,
-                         uint8_t count, const uint8_t* hours, const uint8_t* minutes) {
+                         uint8_t count, const uint8_t* hours, const uint8_t* minutes,
+                         const uint8_t* durations) {
     msg.type = type;
     msg.status = static_cast<uint8_t>(status);
     msg.meeting_count = count;
@@ -26,6 +27,7 @@ static void fill_message(PeerMessage &msg, MsgType type, MeetingStatus status,
     for (int i = 0; i < count && i < MAX_MEETINGS; i++) {
         msg.meetings[i].hour = hours[i];
         msg.meetings[i].minute = minutes[i];
+        msg.meetings[i].duration = durations ? durations[i] : 30;
     }
     msg.timestamp = millis();
 }
@@ -56,7 +58,7 @@ void comms_loop() {
     if (!paired && (now - last_discovery_ms >= DISCOVERY_INTERVAL_MS)) {
         last_discovery_ms = now;
         PeerMessage msg;
-        fill_message(msg, MsgType::DISCOVERY, MeetingStatus::FREE, 0, nullptr, nullptr);
+        fill_message(msg, MsgType::DISCOVERY, MeetingStatus::FREE, 0, nullptr, nullptr, nullptr);
         send_message(broadcast_addr, msg);
     }
 
@@ -73,29 +75,31 @@ void comms_loop() {
         if (now - last_discovery_ms >= DISCOVERY_INTERVAL_MS) {
             last_discovery_ms = now;
             PeerMessage msg;
-            fill_message(msg, MsgType::DISCOVERY, MeetingStatus::FREE, 0, nullptr, nullptr);
+            fill_message(msg, MsgType::DISCOVERY, MeetingStatus::FREE, 0, nullptr, nullptr, nullptr);
             send_message(broadcast_addr, msg);
         }
     }
 }
 
 void comms_send_status(MeetingStatus status, uint8_t count,
-                       const uint8_t* hours, const uint8_t* minutes) {
+                       const uint8_t* hours, const uint8_t* minutes,
+                       const uint8_t* durations) {
     if (!paired) return;
     PeerMessage msg;
-    fill_message(msg, MsgType::STATUS, status, count, hours, minutes);
+    fill_message(msg, MsgType::STATUS, status, count, hours, minutes, durations);
     send_message(peer_mac, msg);
 }
 
 void comms_send_heartbeat(MeetingStatus status, uint8_t count,
-                          const uint8_t* hours, const uint8_t* minutes) {
+                          const uint8_t* hours, const uint8_t* minutes,
+                          const uint8_t* durations) {
     uint32_t now = millis();
     if (now - last_heartbeat_ms < HEARTBEAT_MS) return;
     last_heartbeat_ms = now;
 
     if (!paired) return;
     PeerMessage msg;
-    fill_message(msg, MsgType::HEARTBEAT, status, count, hours, minutes);
+    fill_message(msg, MsgType::HEARTBEAT, status, count, hours, minutes, durations);
     send_message(peer_mac, msg);
 }
 
@@ -132,8 +136,9 @@ static void update_peer_from_msg(const PeerMessage &msg) {
     peer_state.meeting_count = msg.meeting_count;
     if (peer_state.meeting_count > MAX_MEETINGS) peer_state.meeting_count = MAX_MEETINGS;
     for (int i = 0; i < peer_state.meeting_count; i++) {
-        peer_state.meetings[i].hour = msg.meetings[i].hour;
-        peer_state.meetings[i].minute = msg.meetings[i].minute;
+        peer_state.meetings[i].hour     = msg.meetings[i].hour;
+        peer_state.meetings[i].minute   = msg.meetings[i].minute;
+        peer_state.meetings[i].duration = msg.meetings[i].duration;
     }
     peer_state.connected = true;
     peer_state.last_seen_ms = millis();
@@ -166,7 +171,7 @@ static void on_data_recv(const uint8_t *sender_mac, const uint8_t *data, int len
 
                 // Reply so the other side pairs too
                 PeerMessage reply;
-                fill_message(reply, MsgType::DISCOVERY, MeetingStatus::FREE, 0, nullptr, nullptr);
+                fill_message(reply, MsgType::DISCOVERY, MeetingStatus::FREE, 0, nullptr, nullptr, nullptr);
                 send_message(peer_mac, reply);
             }
             break;

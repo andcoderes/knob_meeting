@@ -8,10 +8,15 @@ static UIMode        prev_mode          = UIMode::NORMAL;
 static int           prev_meeting_count = 0;
 static int           prev_browse_index  = 0;
 static int           prev_edit_slot     = 0;
+static int           prev_add_step      = 0;
+static int           prev_duration_slot = 0;
 static int           prev_peer_browse   = 0;
 static MeetingStatus prev_peer_status   = MeetingStatus::FREE;
 static bool          prev_peer_connected = false;
 static int           prev_peer_mcount   = 0;
+static uint8_t       prev_peer_first_h  = 0;
+static uint8_t       prev_peer_first_m  = 0;
+static uint8_t       prev_peer_first_d  = 0;
 static bool          first_draw         = true;
 static uint32_t      last_refresh_ms    = 0;
 static bool          force_redraw       = false;
@@ -19,6 +24,14 @@ static int           prev_clock_min     = -1;
 
 // Searching animation state
 static int search_angle = 0;
+
+// Helper: compute end time from start + duration
+static void calc_end_time(uint8_t sh, uint8_t sm, uint8_t dur,
+                          uint8_t &eh, uint8_t &em) {
+    int total = sh * 60 + sm + dur;
+    eh = total / 60;
+    em = total % 60;
+}
 
 static void draw_background() {
     M5Dial.Display.fillScreen(COLOR_BG);
@@ -99,9 +112,12 @@ static void draw_normal_bottom(const PeerState &peer) {
         M5Dial.Display.setFont(&fonts::FreeSans9pt7b);
         M5Dial.Display.drawString("Peer not connected", SCREEN_CENTER_X, 195);
     } else if (peer.meeting_count > 0) {
-        char buf[24];
-        snprintf(buf, sizeof(buf), "Peer next: %02d:%02d",
-            peer.meetings[0].hour, peer.meetings[0].minute);
+        uint8_t eh, em;
+        calc_end_time(peer.meetings[0].hour, peer.meetings[0].minute,
+                      peer.meetings[0].duration, eh, em);
+        char buf[32];
+        snprintf(buf, sizeof(buf), "Next: %02d:%02d-%02d:%02d",
+            peer.meetings[0].hour, peer.meetings[0].minute, eh, em);
         M5Dial.Display.setTextColor(COLOR_WHITE);
         M5Dial.Display.setFont(&fonts::FreeSansBold12pt7b);
         M5Dial.Display.drawString(buf, SCREEN_CENTER_X, 185);
@@ -131,13 +147,25 @@ static void draw_browse_mode(const MeetingSlot* meetings, int count, int browse_
     M5Dial.Display.drawString(title, SCREEN_CENTER_X, 25);
 
     if (browse_idx >= 0 && browse_idx < count) {
-        char time_buf[8];
+        // Show start time large
+        char time_buf[16];
         snprintf(time_buf, sizeof(time_buf), "%02d:%02d",
             meetings[browse_idx].hour, meetings[browse_idx].minute);
 
         M5Dial.Display.setTextColor(COLOR_WHITE);
         M5Dial.Display.setFont(&fonts::FreeSansBold18pt7b);
-        M5Dial.Display.drawString(time_buf, SCREEN_CENTER_X, 80);
+        M5Dial.Display.drawString(time_buf, SCREEN_CENTER_X, 70);
+
+        // Show duration and end time
+        uint8_t eh, em;
+        calc_end_time(meetings[browse_idx].hour, meetings[browse_idx].minute,
+                      meetings[browse_idx].duration, eh, em);
+        char dur_buf[24];
+        snprintf(dur_buf, sizeof(dur_buf), "%d min (ends %02d:%02d)",
+            meetings[browse_idx].duration, eh, em);
+        M5Dial.Display.setTextColor(COLOR_GRAY);
+        M5Dial.Display.setFont(&fonts::FreeSans9pt7b);
+        M5Dial.Display.drawString(dur_buf, SCREEN_CENTER_X, 100);
 
         if (count > 1) {
             int prev_i = (browse_idx - 1 + count) % count;
@@ -148,10 +176,10 @@ static void draw_browse_mode(const MeetingSlot* meetings, int count, int browse_
             M5Dial.Display.setFont(&fonts::FreeSans9pt7b);
 
             snprintf(buf, sizeof(buf), "%02d:%02d", meetings[prev_i].hour, meetings[prev_i].minute);
-            M5Dial.Display.drawString(buf, SCREEN_CENTER_X, 50);
+            M5Dial.Display.drawString(buf, SCREEN_CENTER_X, 42);
 
             snprintf(buf, sizeof(buf), "%02d:%02d", meetings[next_i].hour, meetings[next_i].minute);
-            M5Dial.Display.drawString(buf, SCREEN_CENTER_X, 110);
+            M5Dial.Display.drawString(buf, SCREEN_CENTER_X, 125);
         }
     }
 
@@ -168,23 +196,25 @@ static void draw_browse_mode(const MeetingSlot* meetings, int count, int browse_
     M5Dial.Display.drawString("Touch: back", SCREEN_CENTER_X, 205);
 }
 
-static void draw_add_edit_mode(UIMode mode, int edit_slot_idx, int count) {
+static void draw_add_time_step(int edit_slot_idx, int count) {
     draw_background();
 
     M5Dial.Display.setTextDatum(middle_center);
     M5Dial.Display.setTextSize(1);
 
-    uint16_t accent = (mode == UIMode::ADD) ? COLOR_BLUE : COLOR_YELLOW;
-    const char* title = (mode == UIMode::ADD) ? "ADD MEETING" : "EDIT TIME";
-
-    M5Dial.Display.setTextColor(accent);
+    M5Dial.Display.setTextColor(COLOR_BLUE);
     M5Dial.Display.setFont(&fonts::FreeSansBold9pt7b);
-    M5Dial.Display.drawString(title, SCREEN_CENTER_X, 30);
+    M5Dial.Display.drawString("ADD MEETING", SCREEN_CENTER_X, 25);
+
+    // Step indicator
+    M5Dial.Display.setTextColor(COLOR_GRAY);
+    M5Dial.Display.setFont(&fonts::FreeSans9pt7b);
+    M5Dial.Display.drawString("Step 1: Start Time", SCREEN_CENTER_X, 50);
 
     uint8_t h, m;
     slot_to_time(edit_slot_idx, h, m);
 
-    M5Dial.Display.fillRoundRect(45, 65, 150, 60, 10, accent);
+    M5Dial.Display.fillRoundRect(45, 65, 150, 60, 10, COLOR_BLUE);
     M5Dial.Display.setTextColor(COLOR_WHITE);
     M5Dial.Display.setFont(&fonts::FreeSansBold18pt7b);
 
@@ -192,17 +222,155 @@ static void draw_add_edit_mode(UIMode mode, int edit_slot_idx, int count) {
     snprintf(time_buf, sizeof(time_buf), "%02d:%02d", h, m);
     M5Dial.Display.drawString(time_buf, SCREEN_CENTER_X, 95);
 
-    M5Dial.Display.setTextColor(accent);
+    M5Dial.Display.setTextColor(COLOR_BLUE);
     M5Dial.Display.setFont(&fonts::FreeSansBold12pt7b);
     M5Dial.Display.drawString("<  Turn knob  >", SCREEN_CENTER_X, 145);
 
-    if (mode == UIMode::ADD) {
-        char cap[16];
-        snprintf(cap, sizeof(cap), "%d/%d slots", count, MAX_MEETINGS);
-        M5Dial.Display.setTextColor(COLOR_GRAY);
-        M5Dial.Display.setFont(&fonts::FreeSans9pt7b);
-        M5Dial.Display.drawString(cap, SCREEN_CENTER_X, 170);
-    }
+    char cap[16];
+    snprintf(cap, sizeof(cap), "%d/%d slots", count, MAX_MEETINGS);
+    M5Dial.Display.setTextColor(COLOR_GRAY);
+    M5Dial.Display.setFont(&fonts::FreeSans9pt7b);
+    M5Dial.Display.drawString(cap, SCREEN_CENTER_X, 170);
+
+    M5Dial.Display.setFont(&fonts::FreeSans9pt7b);
+    M5Dial.Display.setTextColor(COLOR_GREEN);
+    M5Dial.Display.drawString("Btn: next", SCREEN_CENTER_X, 195);
+    M5Dial.Display.setTextColor(COLOR_GRAY);
+    M5Dial.Display.drawString("Touch: cancel", SCREEN_CENTER_X, 218);
+}
+
+static void draw_add_duration_step(int edit_slot_idx, int dur_slot) {
+    draw_background();
+
+    M5Dial.Display.setTextDatum(middle_center);
+    M5Dial.Display.setTextSize(1);
+
+    M5Dial.Display.setTextColor(COLOR_BLUE);
+    M5Dial.Display.setFont(&fonts::FreeSansBold9pt7b);
+    M5Dial.Display.drawString("ADD MEETING", SCREEN_CENTER_X, 25);
+
+    // Step indicator
+    M5Dial.Display.setTextColor(COLOR_GRAY);
+    M5Dial.Display.setFont(&fonts::FreeSans9pt7b);
+    M5Dial.Display.drawString("Step 2: Duration", SCREEN_CENTER_X, 50);
+
+    // Show selected start time (small)
+    uint8_t h, m;
+    slot_to_time(edit_slot_idx, h, m);
+    char start_buf[20];
+    snprintf(start_buf, sizeof(start_buf), "Start: %02d:%02d", h, m);
+    M5Dial.Display.setTextColor(COLOR_WHITE);
+    M5Dial.Display.setFont(&fonts::FreeSans9pt7b);
+    M5Dial.Display.drawString(start_buf, SCREEN_CENTER_X, 70);
+
+    // Duration in big box
+    int dur_minutes = (dur_slot + 1) * MEETING_STEP_MIN;
+    M5Dial.Display.fillRoundRect(45, 85, 150, 50, 10, COLOR_BLUE);
+    M5Dial.Display.setTextColor(COLOR_WHITE);
+    M5Dial.Display.setFont(&fonts::FreeSansBold18pt7b);
+
+    char dur_buf[12];
+    snprintf(dur_buf, sizeof(dur_buf), "%d min", dur_minutes);
+    M5Dial.Display.drawString(dur_buf, SCREEN_CENTER_X, 110);
+
+    // Show end time
+    uint8_t eh, em;
+    calc_end_time(h, m, dur_minutes, eh, em);
+    char end_buf[20];
+    snprintf(end_buf, sizeof(end_buf), "Ends: %02d:%02d", eh, em);
+    M5Dial.Display.setTextColor(COLOR_GRAY);
+    M5Dial.Display.setFont(&fonts::FreeSans9pt7b);
+    M5Dial.Display.drawString(end_buf, SCREEN_CENTER_X, 145);
+
+    M5Dial.Display.setTextColor(COLOR_BLUE);
+    M5Dial.Display.setFont(&fonts::FreeSansBold12pt7b);
+    M5Dial.Display.drawString("<  Turn knob  >", SCREEN_CENTER_X, 170);
+
+    M5Dial.Display.setFont(&fonts::FreeSans9pt7b);
+    M5Dial.Display.setTextColor(COLOR_GREEN);
+    M5Dial.Display.drawString("Btn: confirm", SCREEN_CENTER_X, 195);
+    M5Dial.Display.setTextColor(COLOR_GRAY);
+    M5Dial.Display.drawString("Touch: cancel", SCREEN_CENTER_X, 218);
+}
+
+static void draw_edit_time_step(int edit_slot_idx) {
+    draw_background();
+
+    M5Dial.Display.setTextDatum(middle_center);
+    M5Dial.Display.setTextSize(1);
+
+    M5Dial.Display.setTextColor(COLOR_YELLOW);
+    M5Dial.Display.setFont(&fonts::FreeSansBold9pt7b);
+    M5Dial.Display.drawString("EDIT MEETING", SCREEN_CENTER_X, 25);
+
+    M5Dial.Display.setTextColor(COLOR_GRAY);
+    M5Dial.Display.setFont(&fonts::FreeSans9pt7b);
+    M5Dial.Display.drawString("Step 1: Start Time", SCREEN_CENTER_X, 50);
+
+    uint8_t h, m;
+    slot_to_time(edit_slot_idx, h, m);
+
+    M5Dial.Display.fillRoundRect(45, 65, 150, 60, 10, COLOR_YELLOW);
+    M5Dial.Display.setTextColor(COLOR_WHITE);
+    M5Dial.Display.setFont(&fonts::FreeSansBold18pt7b);
+
+    char time_buf[8];
+    snprintf(time_buf, sizeof(time_buf), "%02d:%02d", h, m);
+    M5Dial.Display.drawString(time_buf, SCREEN_CENTER_X, 95);
+
+    M5Dial.Display.setTextColor(COLOR_YELLOW);
+    M5Dial.Display.setFont(&fonts::FreeSansBold12pt7b);
+    M5Dial.Display.drawString("<  Turn knob  >", SCREEN_CENTER_X, 145);
+
+    M5Dial.Display.setFont(&fonts::FreeSans9pt7b);
+    M5Dial.Display.setTextColor(COLOR_GREEN);
+    M5Dial.Display.drawString("Btn: next", SCREEN_CENTER_X, 195);
+    M5Dial.Display.setTextColor(COLOR_GRAY);
+    M5Dial.Display.drawString("Touch: cancel", SCREEN_CENTER_X, 218);
+}
+
+static void draw_edit_duration_step(int edit_slot_idx, int dur_slot) {
+    draw_background();
+
+    M5Dial.Display.setTextDatum(middle_center);
+    M5Dial.Display.setTextSize(1);
+
+    M5Dial.Display.setTextColor(COLOR_YELLOW);
+    M5Dial.Display.setFont(&fonts::FreeSansBold9pt7b);
+    M5Dial.Display.drawString("EDIT MEETING", SCREEN_CENTER_X, 25);
+
+    M5Dial.Display.setTextColor(COLOR_GRAY);
+    M5Dial.Display.setFont(&fonts::FreeSans9pt7b);
+    M5Dial.Display.drawString("Step 2: Duration", SCREEN_CENTER_X, 50);
+
+    uint8_t h, m;
+    slot_to_time(edit_slot_idx, h, m);
+    char start_buf[20];
+    snprintf(start_buf, sizeof(start_buf), "Start: %02d:%02d", h, m);
+    M5Dial.Display.setTextColor(COLOR_WHITE);
+    M5Dial.Display.setFont(&fonts::FreeSans9pt7b);
+    M5Dial.Display.drawString(start_buf, SCREEN_CENTER_X, 70);
+
+    int dur_minutes = (dur_slot + 1) * MEETING_STEP_MIN;
+    M5Dial.Display.fillRoundRect(45, 85, 150, 50, 10, COLOR_YELLOW);
+    M5Dial.Display.setTextColor(COLOR_WHITE);
+    M5Dial.Display.setFont(&fonts::FreeSansBold18pt7b);
+
+    char dur_buf[12];
+    snprintf(dur_buf, sizeof(dur_buf), "%d min", dur_minutes);
+    M5Dial.Display.drawString(dur_buf, SCREEN_CENTER_X, 110);
+
+    uint8_t eh, em;
+    calc_end_time(h, m, dur_minutes, eh, em);
+    char end_buf[20];
+    snprintf(end_buf, sizeof(end_buf), "Ends: %02d:%02d", eh, em);
+    M5Dial.Display.setTextColor(COLOR_GRAY);
+    M5Dial.Display.setFont(&fonts::FreeSans9pt7b);
+    M5Dial.Display.drawString(end_buf, SCREEN_CENTER_X, 145);
+
+    M5Dial.Display.setTextColor(COLOR_YELLOW);
+    M5Dial.Display.setFont(&fonts::FreeSansBold12pt7b);
+    M5Dial.Display.drawString("<  Turn knob  >", SCREEN_CENTER_X, 170);
 
     M5Dial.Display.setFont(&fonts::FreeSans9pt7b);
     M5Dial.Display.setTextColor(COLOR_GREEN);
@@ -242,32 +410,51 @@ static void draw_peer_meetings(const PeerState &peer, int browse_idx) {
         M5Dial.Display.setFont(&fonts::FreeSans9pt7b);
         M5Dial.Display.drawString(counter, SCREEN_CENTER_X, 50);
 
-        // Show selected meeting large
+        // Show selected meeting: start - end time
         if (browse_idx >= 0 && browse_idx < cnt) {
-            char time_buf[8];
-            snprintf(time_buf, sizeof(time_buf), "%02d:%02d",
-                peer.meetings[browse_idx].hour, peer.meetings[browse_idx].minute);
+            uint8_t sh = peer.meetings[browse_idx].hour;
+            uint8_t sm = peer.meetings[browse_idx].minute;
+            uint8_t dur = peer.meetings[browse_idx].duration;
+            uint8_t eh, em;
+            calc_end_time(sh, sm, dur, eh, em);
+
+            char time_buf[16];
+            snprintf(time_buf, sizeof(time_buf), "%02d:%02d-%02d:%02d",
+                sh, sm, eh, em);
 
             M5Dial.Display.setTextColor(COLOR_WHITE);
             M5Dial.Display.setFont(&fonts::FreeSansBold18pt7b);
-            M5Dial.Display.drawString(time_buf, SCREEN_CENTER_X, 90);
+            M5Dial.Display.drawString(time_buf, SCREEN_CENTER_X, 85);
+
+            // Show duration
+            char dur_buf[12];
+            snprintf(dur_buf, sizeof(dur_buf), "%d min", dur);
+            M5Dial.Display.setTextColor(COLOR_GRAY);
+            M5Dial.Display.setFont(&fonts::FreeSans9pt7b);
+            M5Dial.Display.drawString(dur_buf, SCREEN_CENTER_X, 110);
 
             // Show prev/next
             if (cnt > 1) {
                 int prev_i = (browse_idx - 1 + cnt) % cnt;
                 int next_i = (browse_idx + 1) % cnt;
 
-                char buf[8];
                 M5Dial.Display.setTextColor(COLOR_DARK_GRAY);
                 M5Dial.Display.setFont(&fonts::FreeSans9pt7b);
 
-                snprintf(buf, sizeof(buf), "%02d:%02d",
-                    peer.meetings[prev_i].hour, peer.meetings[prev_i].minute);
+                uint8_t peh, pem;
+                calc_end_time(peer.meetings[prev_i].hour, peer.meetings[prev_i].minute,
+                              peer.meetings[prev_i].duration, peh, pem);
+                char buf[16];
+                snprintf(buf, sizeof(buf), "%02d:%02d-%02d:%02d",
+                    peer.meetings[prev_i].hour, peer.meetings[prev_i].minute, peh, pem);
                 M5Dial.Display.drawString(buf, SCREEN_CENTER_X, 65);
 
-                snprintf(buf, sizeof(buf), "%02d:%02d",
-                    peer.meetings[next_i].hour, peer.meetings[next_i].minute);
-                M5Dial.Display.drawString(buf, SCREEN_CENTER_X, 120);
+                uint8_t neh, nem;
+                calc_end_time(peer.meetings[next_i].hour, peer.meetings[next_i].minute,
+                              peer.meetings[next_i].duration, neh, nem);
+                snprintf(buf, sizeof(buf), "%02d:%02d-%02d:%02d",
+                    peer.meetings[next_i].hour, peer.meetings[next_i].minute, neh, nem);
+                M5Dial.Display.drawString(buf, SCREEN_CENTER_X, 130);
             }
         }
 
@@ -352,6 +539,7 @@ void display_force_redraw() {
 void display_update(MeetingStatus my_status, UIMode mode,
                     const MeetingSlot* meetings, int meeting_count,
                     int browse_index, int edit_slot_idx,
+                    int add_step, int duration_slot,
                     int peer_browse_idx,
                     const PeerState &peer) {
     uint32_t now = millis();
@@ -365,10 +553,29 @@ void display_update(MeetingStatus my_status, UIMode mode,
             draw_browse_mode(meetings, meeting_count, browse_index);
             prev_browse_index = browse_index;
         }
-    } else if (mode == UIMode::ADD || mode == UIMode::EDIT) {
-        if (need_full || edit_slot_idx != prev_edit_slot) {
-            draw_add_edit_mode(mode, edit_slot_idx, meeting_count);
+    } else if (mode == UIMode::ADD) {
+        if (need_full || edit_slot_idx != prev_edit_slot ||
+            add_step != prev_add_step || duration_slot != prev_duration_slot) {
+            if (add_step == 0) {
+                draw_add_time_step(edit_slot_idx, meeting_count);
+            } else {
+                draw_add_duration_step(edit_slot_idx, duration_slot);
+            }
             prev_edit_slot = edit_slot_idx;
+            prev_add_step = add_step;
+            prev_duration_slot = duration_slot;
+        }
+    } else if (mode == UIMode::EDIT) {
+        if (need_full || edit_slot_idx != prev_edit_slot ||
+            add_step != prev_add_step || duration_slot != prev_duration_slot) {
+            if (add_step == 0) {
+                draw_edit_time_step(edit_slot_idx);
+            } else {
+                draw_edit_duration_step(edit_slot_idx, duration_slot);
+            }
+            prev_edit_slot = edit_slot_idx;
+            prev_add_step = add_step;
+            prev_duration_slot = duration_slot;
         }
     } else if (mode == UIMode::PEER_MEETINGS) {
         if (need_full || peer_browse_idx != prev_peer_browse) {
@@ -384,9 +591,15 @@ void display_update(MeetingStatus my_status, UIMode mode,
             draw_normal_bottom(peer);
         } else {
             if (my_status != prev_my_status) draw_my_status(my_status);
+            uint8_t pfh = peer.meeting_count > 0 ? peer.meetings[0].hour : 0;
+            uint8_t pfm = peer.meeting_count > 0 ? peer.meetings[0].minute : 0;
+            uint8_t pfd = peer.meeting_count > 0 ? peer.meetings[0].duration : 0;
             bool peer_changed = (peer.status != prev_peer_status) ||
                                 (peer.connected != prev_peer_connected) ||
-                                ((int)peer.meeting_count != prev_peer_mcount);
+                                ((int)peer.meeting_count != prev_peer_mcount) ||
+                                (pfh != prev_peer_first_h) ||
+                                (pfm != prev_peer_first_m) ||
+                                (pfd != prev_peer_first_d);
             if (peer_changed) {
                 draw_peer_status(peer);
                 draw_normal_bottom(peer);
@@ -404,6 +617,9 @@ void display_update(MeetingStatus my_status, UIMode mode,
     prev_peer_status     = peer.status;
     prev_peer_connected  = peer.connected;
     prev_peer_mcount     = peer.meeting_count;
+    prev_peer_first_h    = peer.meeting_count > 0 ? peer.meetings[0].hour : 0;
+    prev_peer_first_m    = peer.meeting_count > 0 ? peer.meetings[0].minute : 0;
+    prev_peer_first_d    = peer.meeting_count > 0 ? peer.meetings[0].duration : 0;
     first_draw           = false;
     force_redraw         = false;
 }

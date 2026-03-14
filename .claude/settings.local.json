@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pio run:*)",
+      "Bash(where:*)",
+      "Bash(C:\\\\Python38\\\\python.exe:*)",
+      "Bash(cmd.exe:*)",
+      "Bash(cmd /c \"C:\\\\Users\\\\Jaime\\\\.platformio\\\\penv\\\\Scripts\\\\pio.exe run -d C:\\\\Users\\\\Jaime\\\\dev\\\\knob_meeting 2>&1\":*)",
+      "Bash(powershell.exe:*)"
+    ]
+  }
+}

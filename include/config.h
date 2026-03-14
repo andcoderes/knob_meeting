@@ -31,10 +31,12 @@ constexpr uint16_t COLOR_BLUE        = 0x34DF;  // For add mode
 
 // --- Meeting Time Slots ---
 constexpr int MEETING_HOUR_MIN   = 9;   // 9:00 AM
-constexpr int MEETING_HOUR_MAX   = 17;  // 5:00 PM
+constexpr int MEETING_HOUR_MAX   = 23;  // 11:00 PM
 constexpr int MEETING_STEP_MIN   = 5;   // 5-minute increments
-constexpr int MEETING_TOTAL_SLOTS = 97; // (17-9)*12 + 1
+constexpr int MEETING_TOTAL_SLOTS = 169; // (23-9)*12 + 1
 constexpr int MAX_MEETINGS       = 8;   // Max meetings per day
+constexpr int MEETING_MAX_DURATION_MIN = 60;  // Max duration in minutes
+constexpr int MEETING_DURATION_SLOTS   = 12;  // 5,10,15...60 (12 options)
 
 // --- WiFi / NTP (for clock sync on boot) ---
 #include "secrets.h"       // WIFI_SSID, WIFI_PASSWORD (not tracked in git)

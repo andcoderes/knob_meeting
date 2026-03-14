@@ -17,10 +17,10 @@ static uint32_t button_down_ms    = 0;
 static bool     long_press_handled = false;
 
 static void send_heartbeat() {
-    uint8_t hours[MAX_MEETINGS], mins[MAX_MEETINGS];
+    uint8_t hours[MAX_MEETINGS], mins[MAX_MEETINGS], durs[MAX_MEETINGS];
     uint8_t cnt;
-    meeting_get_packed(hours, mins, cnt);
-    comms_send_heartbeat(meeting_get_status(), cnt, hours, mins);
+    meeting_get_packed(hours, mins, durs, cnt);
+    comms_send_heartbeat(meeting_get_status(), cnt, hours, mins, durs);
 }
 
 static void sync_ntp() {
@@ -138,26 +138,44 @@ static void handle_button() {
                     break;
 
                 case UIMode::ADD: {
-                    uint8_t h, m;
-                    slot_to_time(meeting_get_edit_slot(), h, m);
-                    if (meeting_add(h, m)) {
-                        M5Dial.Speaker.tone(BUZZER_FREQ, 100);
-                        Serial.printf("[MAIN] Meeting added: %02d:%02d\n", h, m);
+                    if (meeting_get_add_step() == 0) {
+                        // Step 0 done: move to duration selection
+                        meeting_set_add_step(1);
+                        M5Dial.Speaker.tone(BUZZER_FREQ, 50);
+                        Serial.println("[MAIN] ADD step 1: select duration");
                     } else {
-                        M5Dial.Speaker.tone(500, 200);
-                        Serial.println("[MAIN] Duplicate or full");
+                        // Step 1 done: add the meeting
+                        uint8_t h, m;
+                        slot_to_time(meeting_get_edit_slot(), h, m);
+                        uint8_t dur = (meeting_get_duration_slot() + 1) * MEETING_STEP_MIN;
+                        if (meeting_add(h, m, dur)) {
+                            M5Dial.Speaker.tone(BUZZER_FREQ, 100);
+                            Serial.printf("[MAIN] Meeting added: %02d:%02d (%d min)\n", h, m, dur);
+                        } else {
+                            M5Dial.Speaker.tone(500, 200);
+                            Serial.println("[MAIN] Duplicate or full");
+                        }
+                        meeting_set_mode(UIMode::NORMAL);
                     }
-                    meeting_set_mode(UIMode::NORMAL);
                     break;
                 }
 
                 case UIMode::EDIT: {
-                    uint8_t h, m;
-                    slot_to_time(meeting_get_edit_slot(), h, m);
-                    meeting_update(meeting_get_browse_index(), h, m);
-                    M5Dial.Speaker.tone(BUZZER_FREQ, 100);
-                    Serial.printf("[MAIN] Meeting updated to %02d:%02d\n", h, m);
-                    meeting_set_mode(UIMode::NORMAL);
+                    if (meeting_get_add_step() == 0) {
+                        // Step 0 done: move to duration selection
+                        meeting_set_add_step(1);
+                        M5Dial.Speaker.tone(BUZZER_FREQ, 50);
+                        Serial.println("[MAIN] EDIT step 1: select duration");
+                    } else {
+                        // Step 1 done: update the meeting
+                        uint8_t h, m;
+                        slot_to_time(meeting_get_edit_slot(), h, m);
+                        uint8_t dur = (meeting_get_duration_slot() + 1) * MEETING_STEP_MIN;
+                        meeting_update(meeting_get_browse_index(), h, m, dur);
+                        M5Dial.Speaker.tone(BUZZER_FREQ, 100);
+                        Serial.printf("[MAIN] Meeting updated to %02d:%02d (%d min)\n", h, m, dur);
+                        meeting_set_mode(UIMode::NORMAL);
+                    }
                     break;
                 }
 
@@ -211,10 +229,10 @@ void loop() {
     if (paired && !was_paired) {
         display_force_redraw();
         Serial.println("[MAIN] Peer connected!");
-        uint8_t hours[MAX_MEETINGS], mins[MAX_MEETINGS];
+        uint8_t hours[MAX_MEETINGS], mins[MAX_MEETINGS], durs[MAX_MEETINGS];
         uint8_t cnt;
-        meeting_get_packed(hours, mins, cnt);
-        comms_send_status(meeting_get_status(), cnt, hours, mins);
+        meeting_get_packed(hours, mins, durs, cnt);
+        comms_send_status(meeting_get_status(), cnt, hours, mins, durs);
     }
     if (!paired && was_paired) {
         display_force_redraw();
@@ -253,6 +271,7 @@ void loop() {
         display_update(meeting_get_status(), meeting_get_mode(),
                        meeting_get_all(), meeting_get_count(),
                        meeting_get_browse_index(), meeting_get_edit_slot(),
+                       meeting_get_add_step(), meeting_get_duration_slot(),
                        meeting_get_peer_browse_index(),
                        peer);
     }
